@@ -19,7 +19,9 @@ import {
   type SetSessionConfigOptionResponse,
   type SetSessionModeRequest,
   type SetSessionModeResponse,
-  type StopReason
+  type StopReason,
+  type DeleteSessionRequest,
+  type DeleteSessionResponse
 } from '@agentclientprotocol/sdk'
 import { getAuthMethods } from './auth.js'
 import { SessionManager, type PiAcpSession } from './session.js'
@@ -260,7 +262,8 @@ export class PiAcpAgent implements ACPAgent {
         sessionCapabilities: {
           // **UNSTABLE** ACP capability used by Zed's codex-acp adapter.
           // Enables a native session picker in clients that support it.
-          list: {}
+          list: {},
+          delete: {}
         }
       }
     }
@@ -1103,6 +1106,29 @@ export class PiAcpAgent implements ACPAgent {
     }, 0)
 
     return response
+  }
+
+  async deleteSession(params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
+    const stored = this.store.get(params.sessionId)
+    const piSession = findPiSession(params.sessionId)
+
+    if (!stored && !piSession) {
+      throw RequestError.invalidParams({}, `Unknown sessionId: ${params.sessionId}`)
+    }
+
+    const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
+
+    if (sessionFile) {
+      try {
+        if (existsSync(sessionFile)) unlinkSync(sessionFile)
+      } catch {
+        // best-effort cleanup
+      }
+    }
+
+    this.store.delete(params.sessionId)
+
+    return {}
   }
 
   async unstable_setSessionModel(params: { sessionId: string; modelId: string }): Promise<void> {
