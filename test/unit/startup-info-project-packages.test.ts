@@ -30,7 +30,7 @@ test('PiAcpAgent: startup info includes project-level packages from .pi/settings
   writeFileSync(join(piDir, 'settings.json'), JSON.stringify({ packages: ['/path/to/local-extension'] }), 'utf-8')
 
   const realSetTimeout = globalThis.setTimeout
-  ;(globalThis as any).setTimeout = (fn: unknown) => {
+  ;(globalThis as any).setTimeout = () => {
     return 0 as any
   }
 
