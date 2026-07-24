@@ -95,7 +95,7 @@ test('PiAcpAgent: deleteSession finds session via pi discovery when SessionStore
   }
 })
 
-test('PiAcpAgent: deleteSession throws on unknown sessionId', async () => {
+test('PiAcpAgent: deleteSession succeeds idempotently for unknown sessionId', async () => {
   const root = mkdtempSync(join(tmpdir(), 'pi-acp-delete-unknown-'))
   const sessionsDir = join(root, 'sessions', '--tmp--delete-unknown--')
   mkdirSync(sessionsDir, { recursive: true })
@@ -106,11 +106,23 @@ test('PiAcpAgent: deleteSession throws on unknown sessionId', async () => {
   const conn = new FakeAgentSideConnection()
   const agent = new PiAcpAgent(asAgentConn(conn))
 
+  // Per ACP session/delete semantics, deleting a non-existent session
+  // should succeed idempotently (return {} without error).
+  const storeDeletes: string[] = []
+  ;(agent as any).store = {
+    get() {
+      return null
+    },
+    delete(sessionId: string) {
+      storeDeletes.push(sessionId)
+    },
+    upsert() {}
+  }
+
   try {
-    await agent.deleteSession({ sessionId: 'non-existent-session' } as any)
-    assert.fail('Expected error for unknown sessionId')
-  } catch (err: any) {
-    assert.match(String(err?.message ?? err), /Unknown sessionId/)
+    const response = await agent.deleteSession({ sessionId: 'non-existent-session' } as any)
+    assert.deepEqual(response, {})
+    assert.deepEqual(storeDeletes, [])
   } finally {
     if (oldEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
     else process.env.PI_CODING_AGENT_DIR = oldEnv

@@ -1112,8 +1112,11 @@ export class PiAcpAgent implements ACPAgent {
     const stored = this.store.get(params.sessionId)
     const piSession = findPiSession(params.sessionId)
 
+    // Per ACP session/delete semantics, deleting a session that does not
+    // exist (or is already gone) should succeed idempotently.
+    // https://agentclientprotocol.com/protocol/v2/session-delete#semantics
     if (!stored && !piSession) {
-      throw RequestError.invalidParams({}, `Unknown sessionId: ${params.sessionId}`)
+      return {}
     }
 
     const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
