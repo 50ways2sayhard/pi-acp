@@ -1197,7 +1197,7 @@ export class PiAcpAgent implements ACPAgent {
 }
 
 function isThinkingLevel(x: string): x is ThinkingLevel {
-  return x === 'off' || x === 'minimal' || x === 'low' || x === 'medium' || x === 'high' || x === 'xhigh' | x === 'max'
+  return x === 'off' || x === 'minimal' || x === 'low' || x === 'medium' || x === 'high' || x === 'xhigh' || x === 'max'
 }
 
 async function getThinkingState(
