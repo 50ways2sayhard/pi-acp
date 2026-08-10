@@ -58,6 +58,7 @@ const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
 ]
 const EXTENSION_UI_RAW_INPUT_KEYS = ['title', 'message', 'options', 'placeholder', 'prefill'] as const
 const CHOICE_OPTION_PREFIX = 'choice-'
+const PI_UI_INPUT_METHOD = '_pi/ui/input'
 
 function findUniqueLineNumber(text: string, needle: string): number | undefined {
   if (!needle) return undefined
@@ -907,14 +908,7 @@ export class PiAcpSession {
     }
 
     if (method === 'input' || method === 'editor') {
-      this.emit({
-        sessionUpdate: 'agent_message_chunk',
-        content: {
-          type: 'text',
-          text: `Pi ${method} UI request is not supported in ACP yet; cancelling it.`
-        } satisfies ContentBlock
-      })
-      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+      await this.handleExtensionInput(ev, id, method)
       return
     }
 
@@ -929,6 +923,38 @@ export class PiAcpSession {
     }
 
     await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+  }
+
+  private async handleExtensionInput(ev: PiRpcEvent, id: string, method: 'input' | 'editor'): Promise<void> {
+    if (typeof this.conn.extMethod !== 'function') {
+      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+      return
+    }
+
+    try {
+      const response = await this.conn.extMethod(PI_UI_INPUT_METHOD, {
+        sessionId: this.sessionId,
+        requestId: id,
+        method,
+        ...extensionUiFields(ev)
+      })
+
+      if (response.cancelled === true || typeof response.value !== 'string') {
+        await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+        return
+      }
+
+      await this.proc.sendExtensionUiResponse({ id, value: response.value })
+    } catch {
+      this.emit({
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: `Pi ${method} UI request failed; cancelling it.`
+        } satisfies ContentBlock
+      })
+      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+    }
   }
 
   private async handleExtensionSelect(ev: PiRpcEvent, id: string): Promise<void> {
@@ -988,14 +1014,18 @@ export class PiAcpSession {
   }
 }
 
+function extensionUiFields(ev: PiRpcEvent): Record<string, unknown> {
+  const fields: Record<string, unknown> = {}
+  for (const key of EXTENSION_UI_RAW_INPUT_KEYS) {
+    if (Object.hasOwn(ev, key)) fields[key] = ev[key]
+  }
+  return fields
+}
+
 function extensionUiToolCall(id: string, ev: PiRpcEvent) {
   const method = stringProp(ev, 'method') ?? 'ui'
   const title = stringProp(ev, 'title') ?? `Pi ${method}`
-  const rawInput: Record<string, unknown> = { method }
-
-  for (const key of EXTENSION_UI_RAW_INPUT_KEYS) {
-    if (Object.hasOwn(ev, key)) rawInput[key] = ev[key]
-  }
+  const rawInput = { method, ...extensionUiFields(ev) }
 
   return {
     toolCallId: `pi-ui-${id}`,

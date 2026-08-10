@@ -286,8 +286,9 @@ test('PiAcpSession: sends cancelled response when ACP confirm is cancelled', asy
   assert.deepEqual(proc.extensionUiResponses, [{ id: 'ui-5', cancelled: true }])
 })
 
-test('PiAcpSession: cancels unsupported input and editor extension UI requests with visible fallback', async () => {
+test('PiAcpSession: forwards input and editor extension UI requests through ACP extension methods', async () => {
   const conn = new FakeAgentSideConnection()
+  conn.nextExtensionResponse = { value: 'Ada' }
   const proc = new FakePiRpcProcess()
 
   new PiAcpSession({
@@ -299,18 +300,66 @@ test('PiAcpSession: cancels unsupported input and editor extension UI requests w
     fileCommands: []
   })
 
-  proc.emit({ type: 'extension_ui_request', id: 'ui-3', method: 'input', title: 'Enter name' })
+  proc.emit({
+    type: 'extension_ui_request',
+    id: 'ui-3',
+    method: 'input',
+    title: 'Enter name',
+    placeholder: 'Name',
+    prefill: 'A'
+  })
   proc.emit({ type: 'extension_ui_request', id: 'ui-4', method: 'editor', title: 'Edit text' })
 
   await new Promise(r => setTimeout(r, 0))
 
-  assert.deepEqual(proc.extensionUiResponses, [
-    { id: 'ui-3', cancelled: true },
-    { id: 'ui-4', cancelled: true }
+  assert.deepEqual(conn.extensionRequests, [
+    {
+      method: '_pi/ui/input',
+      params: {
+        sessionId: 's1',
+        requestId: 'ui-3',
+        method: 'input',
+        title: 'Enter name',
+        placeholder: 'Name',
+        prefill: 'A'
+      }
+    },
+    {
+      method: '_pi/ui/input',
+      params: {
+        sessionId: 's1',
+        requestId: 'ui-4',
+        method: 'editor',
+        title: 'Edit text'
+      }
+    }
   ])
-  assert.equal(conn.updates.length, 2)
-  assert.match((conn.updates[0]!.update as any).content.text, /input UI request is not supported/)
-  assert.match((conn.updates[1]!.update as any).content.text, /editor UI request is not supported/)
+  assert.deepEqual(proc.extensionUiResponses, [
+    { id: 'ui-3', value: 'Ada' },
+    { id: 'ui-4', value: 'Ada' }
+  ])
+  assert.equal(conn.updates.length, 0)
+})
+
+test('PiAcpSession: forwards cancelled input responses back to Pi', async () => {
+  const conn = new FakeAgentSideConnection()
+  conn.nextExtensionResponse = { cancelled: true }
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({ type: 'extension_ui_request', id: 'ui-5', method: 'input', title: 'Enter name' })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.deepEqual(proc.extensionUiResponses, [{ id: 'ui-5', cancelled: true }])
 })
 
 test('PiAcpSession: emits agent_message_chunk for auto_retry_start with attempt/maxAttempts and rounded delay', async () => {
