@@ -296,6 +296,7 @@ export class PiAcpSession {
   // Ensure `session/update` notifications are sent in order and can be awaited
   // before completing a `session/prompt` request.
   private lastEmit: Promise<void> = Promise.resolve()
+  private contextUsageUpdate: Promise<void> = Promise.resolve()
 
   constructor(opts: {
     sessionId: string
@@ -417,6 +418,35 @@ export class PiAcpSession {
 
   private async flushEmits(): Promise<void> {
     await this.lastEmit
+  }
+
+  /** Forward Pi's context-window accounting through the ACP usage update. */
+  private async emitContextUsage(): Promise<void> {
+    try {
+      const stats = (await this.proc.getSessionStats()) as {
+        contextUsage?: {
+          tokens?: number | null
+          contextWindow?: number
+        }
+      }
+      const usage = stats?.contextUsage
+      const contextWindow = usage?.contextWindow
+      if (!usage || typeof contextWindow !== 'number' || contextWindow <= 0) return
+
+      this.emit({
+        sessionUpdate: 'usage_update',
+        used: typeof usage.tokens === 'number' ? Math.max(0, Math.round(usage.tokens)) : 0,
+        size: Math.round(contextWindow)
+      })
+      await this.flushEmits()
+    } catch {
+      // Usage is optional; a stats failure must not fail the prompt turn.
+    }
+  }
+
+  private queueContextUsage(): Promise<void> {
+    this.contextUsageUpdate = this.contextUsageUpdate.then(() => this.emitContextUsage())
+    return this.contextUsageUpdate
   }
 
   private emitBashToolCall(params: {
@@ -828,6 +858,7 @@ export class PiAcpSession {
 
       case 'agent_start': {
         this.inAgentLoop = true
+        void this.queueContextUsage()
         break
       }
 
@@ -841,33 +872,36 @@ export class PiAcpSession {
         // One low-level run ended. Pi may still retry, compact, or process a queued
         // continuation, so keep the ACP turn open until `agent_settled`.
         this.inAgentLoop = false
+        void this.queueContextUsage()
         break
       }
 
       case 'agent_settled': {
         // Ensure all updates derived from pi events are delivered before we resolve
         // the ACP `session/prompt` request.
-        void this.flushEmits().finally(() => {
-          const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
-          this.pendingTurn?.resolve(reason)
-          this.pendingTurn = null
-          this.inAgentLoop = false
+        void this.queueContextUsage()
+          .then(() => this.flushEmits())
+          .finally(() => {
+            const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
+            this.pendingTurn?.resolve(reason)
+            this.pendingTurn = null
+            this.inAgentLoop = false
 
-          // Start next queued prompt, if any.
-          const next = this.turnQueue.shift()
-          if (next) {
-            this.emit({
-              sessionUpdate: 'agent_message_chunk',
-              content: { type: 'text', text: `Starting queued message. (${this.turnQueue.length} remaining)` }
-            })
-            this.startTurn(next)
-          } else {
-            this.emit({
-              sessionUpdate: 'session_info_update',
-              _meta: { piAcp: { queueDepth: 0, running: false } }
-            })
-          }
-        })
+            // Start next queued prompt, if any.
+            const next = this.turnQueue.shift()
+            if (next) {
+              this.emit({
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: `Starting queued message. (${this.turnQueue.length} remaining)` }
+              })
+              this.startTurn(next)
+            } else {
+              this.emit({
+                sessionUpdate: 'session_info_update',
+                _meta: { piAcp: { queueDepth: 0, running: false } }
+              })
+            }
+          })
         break
       }
 
