@@ -6,11 +6,14 @@ type SessionUpdateMsg = Parameters<AgentSideConnection['sessionUpdate']>[0]
 export class FakeAgentSideConnection {
   readonly updates: SessionUpdateMsg[] = []
   readonly permissionRequests: unknown[] = []
-  readonly extensionRequests: Array<{ method: string; params: Record<string, unknown> }> = []
   nextPermissionResponse: { outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } } = {
     outcome: { outcome: 'selected', optionId: 'allow' }
   }
-  nextExtensionResponse: Record<string, unknown> = { value: '' }
+
+  // elicitation (unstable) spy
+  readonly elicitationRequests: unknown[] = []
+  elicitationResponse: any = { action: 'accept', content: { value: 'my answer' } }
+  elicitationError: Error | null = null
 
   async sessionUpdate(msg: SessionUpdateMsg): Promise<void> {
     this.updates.push(msg)
@@ -23,9 +26,10 @@ export class FakeAgentSideConnection {
     return this.nextPermissionResponse
   }
 
-  async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
-    this.extensionRequests.push({ method, params })
-    return this.nextExtensionResponse
+  async unstable_createElicitation(params: any): Promise<any> {
+    this.elicitationRequests.push(params)
+    if (this.elicitationError) throw this.elicitationError
+    return this.elicitationResponse
   }
 }
 

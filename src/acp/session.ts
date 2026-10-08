@@ -58,7 +58,6 @@ const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
 ]
 const EXTENSION_UI_RAW_INPUT_KEYS = ['title', 'message', 'options', 'placeholder', 'prefill'] as const
 const CHOICE_OPTION_PREFIX = 'choice-'
-const PI_UI_INPUT_METHOD = '_pi/ui/input'
 
 function findUniqueLineNumber(text: string, needle: string): number | undefined {
   if (!needle) return undefined
@@ -942,7 +941,7 @@ export class PiAcpSession {
     }
 
     if (method === 'input' || method === 'editor') {
-      await this.handleExtensionInput(ev, id, method)
+      await this.handleExtensionInput(ev, id)
       return
     }
 
@@ -959,34 +958,38 @@ export class PiAcpSession {
     await this.proc.sendExtensionUiResponse({ id, cancelled: true })
   }
 
-  private async handleExtensionInput(ev: PiRpcEvent, id: string, method: 'input' | 'editor'): Promise<void> {
-    if (typeof this.conn.extMethod !== 'function') {
-      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
-      return
-    }
-
+  /**
+   * Pi `input`/`editor` UI requests carry freeform text (ask_user custom answers,
+   * comments, multi-select). ACP permission options cannot carry text, so surface
+   * them via the (UNSTABLE) `elicitation/create` form mechanism. Clients that do
+   * not support elicitation respond with an error, which we treat as a cancel
+   * (same behaviour as before this change).
+   */
+  private async handleExtensionInput(ev: PiRpcEvent, id: string): Promise<void> {
+    const title = stringProp(ev, 'title') ?? 'Pi input'
+    const placeholder = stringProp(ev, 'placeholder')
+    const prefill = stringProp(ev, 'prefill')
     try {
-      const response = await this.conn.extMethod(PI_UI_INPUT_METHOD, {
+      const result = await this.conn.unstable_createElicitation({
         sessionId: this.sessionId,
-        requestId: id,
-        method,
-        ...extensionUiFields(ev)
+        message: title,
+        mode: 'form',
+        requestedSchema: {
+          type: 'object',
+          title,
+          properties: {
+            value: {
+              type: 'string',
+              title: placeholder ?? 'Answer',
+              ...(prefill ? { default: prefill } : {})
+            }
+          },
+          required: ['value']
+        }
       })
-
-      if (response.cancelled === true || typeof response.value !== 'string') {
-        await this.proc.sendExtensionUiResponse({ id, cancelled: true })
-        return
-      }
-
-      await this.proc.sendExtensionUiResponse({ id, value: response.value })
+      const value = result?.action === 'accept' ? result.content?.value : undefined
+      await this.proc.sendExtensionUiResponse(typeof value === 'string' ? { id, value } : { id, cancelled: true })
     } catch {
-      this.emit({
-        sessionUpdate: 'agent_message_chunk',
-        content: {
-          type: 'text',
-          text: `Pi ${method} UI request failed; cancelling it.`
-        } satisfies ContentBlock
-      })
       await this.proc.sendExtensionUiResponse({ id, cancelled: true })
     }
   }
